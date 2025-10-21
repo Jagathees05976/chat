@@ -170,6 +170,26 @@ get_product_function = {
     }
 }
 
+recommend_product_function = {
+    "name": "recommend_product",
+    "description": "Fetches perfumes from the Milaparfum database based on scent type and budget range.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "scent_type": {
+                "type": "string",
+                "description": "Type of perfume based on target audience (e.g., 'men', 'women', or 'unisex').",
+                "enum": ["men", "women", "unisex"]
+            },
+            "max_price": {
+                "type": "number",
+                "description": "Maximum price of the perfume in INR."
+            }
+        },
+        "required": ["scent_type", "max_price"]
+    }
+}
+
 track_order_function = {
   "name": "track_order",
   "description": "Track the status of an order using the order number",
@@ -193,6 +213,10 @@ track_order_function = {
   }
 }
 
+import json
+
+
+
 
 instruction = """
 You are a friendly and knowledgeable AI shopping assistant for the **Milaparfum** e-commerce website, which sells **non-alcoholic perfumes**.  
@@ -208,7 +232,7 @@ Follow these strict conversational and logical steps before calling `get_product
    Example: “Great! What’s your budget for the perfume?”
 
 3. After receiving the budget, **do not ask any other questions.**  
-   Immediately call the `get_product` tool using the values you’ve collected:
+   Immediately call the `get_product` or `recommend_product` tool using the values you’ve collected:
    - `product_type` (men/women/unisex)
    - `budget`
 
@@ -218,7 +242,38 @@ Follow these strict conversational and logical steps before calling `get_product
 
 5. Avoid filler text like “let me confirm” or “you selected this.”  
    Just respond naturally and proceed to the next step when you have the required info.
+Function:
+1. `get_product` - Fetches products based on filtering options provided by the user and returns the data.
+2. `recommend_product` - Fetches product data and analyzes it to recommend the 4 or 5 best products. You must provide reasoning for each recommendation, highlighting price, rating, brand, features, and attributes. 
 
+For each recommended product:
+   - Explain **why** it was chosen.
+   - Mention key factors such as price, rating, brand reputation, standout features, and attributes.
+
+  At the end, return a **JSON object** in this exact format:
+
+{
+  "recommendations": [
+    {
+      "product_name": "Product Name 1",
+      "reason": "This product offers the best balance of price and rating, with premium materials and trusted brand reputation."
+    },
+    {
+      "product_name": "Product Name 2",
+      "reason": "Affordable option with strong performance features and excellent customer reviews."
+    },
+    {
+      "product_name": "Product Name 3",
+      "reason": "High-end choice with superior build quality, advanced technology, and reliability."
+    }
+  ]
+}
+
+     **For product recommendations**:
+   - Analyze all product details (price, rating, brand, features, attributes)
+   - Recommend the top 4–5 products
+   - Make sure the reasoning is **clear, concise, and data-based**.  
+   - Do **not** include any text outside the JSON object.
 
 Strict rules:
 - You must collect **exactly two pieces of information**: type (men/women/unisex) and budget.  
@@ -246,6 +301,8 @@ Follow these strict conversational and logical steps before calling `track_order
   - `product_name` (string): The name of the product. Required if the user does not know the order_id.
   - `name` (string): Customer's name. Required if the user does not provide the order_id.
 
+note: Say the status of the order with product name and order_id
+
  Example flow:
 User: What’s the status of my order 12345?
 Bot: Got it! Checking your order 12345...
@@ -267,7 +324,7 @@ Bot: Can you tell me the product name or the order ID so I can check it for you?
 
 
 
-tools = types.Tool(function_declarations=[get_product_function,track_order_function])
+tools = types.Tool(function_declarations=[get_product_function,track_order_function, recommend_product_function])
 config = types.GenerateContentConfig(tools=[tools],system_instruction=instruction)
 
 API_KEY = "AIzaSyAOFKYiOtdUWd9X0dOuIMcwKCaS5Bh0wOw"
@@ -297,7 +354,7 @@ async def chatbot_endpoint(chat_req: ChatRequest):
     
     product_data = []
     msg = ""
-    recommendation_data = ""
+    recommendation_data = []
 
     contents = []
 
@@ -328,15 +385,10 @@ async def chatbot_endpoint(chat_req: ChatRequest):
 
         print(t)
 
-        
-
-
-        if tool_call.name=="get_product":
-            
-
-
+        if tool_call.name=="get_product":           
             result = await get_product(tool_call.args["scent_type"],tool_call.args["max_price"])
-            return result
+            product_data = result
+            msg = "Here are the asked perfumes"
 
 
         elif tool_call.name == 'track_order':
@@ -344,6 +396,62 @@ async def chatbot_endpoint(chat_req: ChatRequest):
             result = await get_orders(tool_call.args)
             #return result[0]
             print(f"Function execution result: {result}")
+            function_response_part = types.Part.from_function_response(
+                name=tool_call.name, response={"result":result}
+            )
+            contents.append(response.candidates[0].content)
+            contents.append(types.Content(role="user", parts=[function_response_part]))         
+
+            try:   
+                final_response = gclient.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents,
+                config=config,
+                )
+                llm_response = final_response.candidates[0].content.parts[0].text
+                msg =  llm_response
+                
+
+            except Exception as e:
+                print("wwError generating content:", e)
+
+        elif tool_call.name == 'recommend_product':
+            print("recommend product")
+            result = await get_product(tool_call.args["scent_type"],tool_call.args["max_price"])
+
+            product_data = result
+
+            function_response_part = types.Part.from_function_response(
+                name=tool_call.name, response={"result":result}
+            )
+
+            contents.append(response.candidates[0].content)
+            contents.append(types.Content(role="user", parts=[function_response_part]))
+
+            try:
+                
+                final_response = gclient.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents,
+                config=config,
+                )
+            
+                llm_response = final_response.candidates[0].content.parts[0].text
+                
+                data = json.loads(llm_response)
+                recommendation_data = data.get("recommendations", [])
+                msg = "Here are the recommended products"
+
+                
+
+            except Exception as e:
+                print("wwError generating content:", e)
+
+        
+
 
     except Exception as e:
         print("wwError generating content:", e)
+
+    finally:
+        return {"product_data":product_data, "msg":msg, "recommendation_data":recommendation_data}
