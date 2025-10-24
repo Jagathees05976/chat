@@ -5,43 +5,45 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime
 from models import Product, Order
 from bson import ObjectId
-
+import re
 from google import genai
 from google.genai import types
 import requests
 import os
-
-
 from fastapi.middleware.cors import CORSMiddleware
+import json
+from dotenv import load_dotenv
+from pathlib import Path
 
 app = FastAPI()
 
-
 origins = [
-    "http://localhost:5173",      # React dev server
+    "http://localhost:5173",    
     "http://127.0.0.1:5173",
+    "http://localhost:8001"
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,        # Allow these origins
+    allow_origins=origins,        
     allow_credentials=True,
-    allow_methods=["*"],          # Allow all HTTP methods (GET, POST, etc.)
-    allow_headers=["*"],          # Allow all headers
+    allow_methods=["*"],      
+    allow_headers=["*"],          
 )
-
 
 @app.get('/')
 async def root():
     return {'message': 'E-commerce API runnig'}
 
+env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
-
-MONGO_URI = "mongodb+srv://thecoder4004:mathan1999@cluster0.jlwuemb.mongodb.net/mila-ecom?retryWrites=true&w=majority&appName=Cluster0"
-DATABASE_NAME = "mila-ecom"
+MONGO_URI = os.getenv("MONGO_URI")
+database = os.getenv("DATABASE_NAME")
+API_KEY = os.getenv("API_KEY")
 
 client = AsyncIOMotorClient(MONGO_URI)
-db = client[DATABASE_NAME]
+db = client[database]
 
 def get_database():
     return db
@@ -52,36 +54,19 @@ cat_map = {
     "unisex": []
 }
 
-
 def serialize_product(product):
     product["_id"] = str(product["_id"])
     if "category" in product and isinstance(product["category"], ObjectId):
         product["category"] = str(product["category"])
     return product
 
-# @app.get("/product")
-# async def get_products():
-#     products = await db["products"].find().to_list(100)
-#     return [serialize_product(p) for p in products]
-
-import re
-
 async def get_product(scent_type: str, max_price: float):
-    """
-    Fetch products filtered ONLY by max_price and categoryInfo.sub based on cat_map.
-    """
     scent_type_lower = scent_type.lower()
     subcategories = cat_map.get(scent_type_lower, [])
-
-    # Basic price filter
     products_cursor = await db["products"].find({"basePrice": {"$lte": max_price}}).to_list(200)
 
-    # Filter by category only
-
     filtered = []
-
     for p in products_cursor:
-
 
         if p.get("categoryInfo", {}).get("sub", "") in subcategories:
             filtered.append(p)
@@ -94,10 +79,7 @@ async def get_product(scent_type: str, max_price: float):
                 filtered.append(p)
             elif re.search(r"\bunisex\b", name) and scent_type_lower == "unisex":
                 filtered.append(p)
-
-
-    
-      
+   
     return [serialize_product(p) for p in filtered]
 
 def serialize_doc(doc):
@@ -110,45 +92,39 @@ def serialize_doc(doc):
             doc[k] = serialize_doc(v)
     return doc
 
-
-# @app.get("/orders", response_model=List[Order])
-# async def get_orders():
-#     orders = await db["orders"].find().to_list(100)
-#     return [serialize_doc(order) for order in orders]
-
-
-
 async def get_orders(args: dict):
     args = args or {}
     order_number = args.get("order_id")
     product_name = args.get("product_name")
     full_name = args.get("name")
+
+    query = {}
     if order_number:
+        # Direct lookup by order number
         query = {"orderNumber": order_number}
+
     elif product_name and full_name:
-        # Match orders where:
-        # - fullName in shippingAddress OR billingAddress
-        # - AND any item in items has productSnapshot.name matching product_name
+        # Match by customer name and product name
         query = {
             "$and": [
-                {"$or": [
-                    {"shippingAddress.fullName": full_name},
-                    {"billingAddress.fullName": full_name}
-                ]},
-                {"items": {
-                    "$elemMatch": {"productSnapshot.name": {"$regex": product_name, "$options": "i"}}
-                }}
+                {
+                    "$or": [
+                        {"shippingAddress.fullName": {"$regex": full_name, "$options": "i"}},
+                        {"billingAddress.fullName": {"$regex": full_name, "$options": "i"}}
+                    ]
+                },
+                {
+                    "items": {
+                        "$elemMatch": {
+                            "productSnapshot.name": {"$regex": product_name, "$options": "i"}
+                        }
+                    }
+                }
             ]
         }
-    # else:
-    #     # If neither provided, return empty list
-    #     return []
 
     orders_cursor = await db["orders"].find(query).to_list(100)
     return [serialize_doc(order) for order in orders_cursor]
-
-
-#-------------------------------
 
 get_product_function = {
     "name": "get_product",
@@ -172,7 +148,7 @@ get_product_function = {
 
 recommend_product_function = {
     "name": "recommend_product",
-    "description": "Fetches perfumes from the Milaparfum database based on scent type and budget range.",
+    "description": "Recommend perfumes from the Milaparfum database based on scent type and budget range.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -213,11 +189,6 @@ track_order_function = {
   }
 }
 
-import json
-
-
-
-
 instruction = """
 You are a friendly and knowledgeable AI shopping assistant for the **Milaparfum** e-commerce website, which sells **non-alcoholic perfumes**.  
 You can interact with the database using tools such as `get_product`, `recommend_product` and `track_order`.  
@@ -242,6 +213,7 @@ Follow these strict conversational and logical steps before calling `get_product
 
 5. Avoid filler text like “let me confirm” or “you selected this.”  
    Just respond naturally and proceed to the next step when you have the required info.
+
 Function:
 1. `get_product` - Fetches products based on filtering options provided by the user and returns the data.
 2. `recommend_product` - Fetches product data and analyzes it to recommend the 4 or 5 best products. You must provide reasoning for each recommendation, highlighting price, rating, brand, features, and attributes. 
@@ -275,12 +247,14 @@ For each recommended product:
    - Make sure the reasoning is **clear, concise, and data-based**.  
    - Do **not** include any text outside the JSON object.
 
+
 Strict rules:
 - You must collect **exactly two pieces of information**: type (men/women/unisex) and budget.  
 - After that, you must immediately call the `get_product` function.
 - Do not call any tool before knowing both type and budget.
 - Be concise, human-like, and elegant in your tone — fitting for a perfume brand.
 
+note: If user says "show me perfumes" call get_product function.
 
 Example flow:
 User: Hi  
@@ -301,7 +275,8 @@ Follow these strict conversational and logical steps before calling `track_order
   - `product_name` (string): The name of the product. Required if the user does not know the order_id.
   - `name` (string): Customer's name. Required if the user does not provide the order_id.
 
-note: Say the status of the order with product name and order_id
+note: Use the latest user input (‘{user_input}’) as the customer’s name and call the track-order function for {item_name}.
+Say the status of the order with product name and order_id
 
  Example flow:
 User: What’s the status of my order 12345?
@@ -321,49 +296,30 @@ Bot: Can you tell me the product name or the order ID so I can check it for you?
 
 """
 
-
-
-
 tools = types.Tool(function_declarations=[get_product_function,track_order_function, recommend_product_function])
 config = types.GenerateContentConfig(tools=[tools],system_instruction=instruction)
 
-API_KEY = "AIzaSyAOFKYiOtdUWd9X0dOuIMcwKCaS5Bh0wOw"
 
 gclient = genai.Client(api_key=API_KEY)
-
-#config = types.GenerateContentConfig(system_instruction=instruction)
-
-
 conversation_history = []
 
 class ChatRequest(BaseModel):
     user_input: str
     
-
 @app.post("/chat/")
 async def chatbot_endpoint(chat_req: ChatRequest):
-
     global conversation_history
-
     user_input = chat_req.user_input
 
     conversation_history.append(
         types.Content(role="user", parts=[types.Part(text=user_input)])
     )
-
-    
+   
     product_data = []
     msg = ""
     recommendation_data = []
-
     contents = []
-
     contents.extend(conversation_history)
-
-    # contents = [types.Content(
-    #     role="user", parts=[types.Part(text=user_input)]
-    # )
-    # ]
 
     try:
         response = gclient.models.generate_content(
@@ -372,30 +328,21 @@ async def chatbot_endpoint(chat_req: ChatRequest):
             config=config
         )
 
-        #print(response.candidates[0].content.parts[0])
-
-        #print(response)
         tool_call = response.candidates[0].content.parts[0].function_call
-
         t = response.candidates[0].content.parts[0].text
-
         msg = t
-
-        print(tool_call)
-
-        print(t)
 
         if tool_call.name=="get_product":           
             result = await get_product(tool_call.args["scent_type"],tool_call.args["max_price"])
             product_data = result
             msg = "Here are the asked perfumes"
-
+            conversation_history = []
 
         elif tool_call.name == 'track_order':
-            print("track_order")
+            
             result = await get_orders(tool_call.args)
             #return result[0]
-            print(f"Function execution result: {result}")
+            
             function_response_part = types.Part.from_function_response(
                 name=tool_call.name, response={"result":result}
             )
@@ -411,14 +358,14 @@ async def chatbot_endpoint(chat_req: ChatRequest):
                 llm_response = final_response.candidates[0].content.parts[0].text
                 msg =  llm_response
                 
-
             except Exception as e:
                 print("wwError generating content:", e)
 
-        elif tool_call.name == 'recommend_product':
-            print("recommend product")
-            result = await get_product(tool_call.args["scent_type"],tool_call.args["max_price"])
+            conversation_history = []
 
+        elif tool_call.name == 'recommend_product':
+           
+            result = await get_product(tool_call.args["scent_type"],tool_call.args["max_price"])
             product_data = result
 
             function_response_part = types.Part.from_function_response(
@@ -435,20 +382,31 @@ async def chatbot_endpoint(chat_req: ChatRequest):
                 contents=contents,
                 config=config,
                 )
-            
-                llm_response = final_response.candidates[0].content.parts[0].text
-                
-                data = json.loads(llm_response)
-                recommendation_data = data.get("recommendations", [])
-                msg = "Here are the recommended products"
+                llm_response = final_response.candidates[0].content.parts[0].text               
+                match = re.search(r"\{[\s\S]*\}", llm_response)
+                if not match:
+                    print("⚠️ No valid JSON found in model output.")
+                    data = {"recommendations": []}
+                else:
+                    json_str = match.group(0)
+                    try:
+                        data = json.loads(json_str)
+                    except json.JSONDecodeError as e:
+                        print("⚠️ JSON decode error:", e)
+                        data = {"recommendations": []}
 
+                    recommendation_data = data.get("recommendations", [])
                 
+                recommended_products = [
+                p for p in result
+                if any(r["product_name"] == p["name"] for r in recommendation_data)]
+                product_data = recommended_products
+                msg = "Here are the recommended perfumes"
 
             except Exception as e:
                 print("wwError generating content:", e)
 
-        
-
+            conversation_history = []
 
     except Exception as e:
         print("wwError generating content:", e)

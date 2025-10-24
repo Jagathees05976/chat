@@ -1,17 +1,13 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
-
 from datetime import datetime
-
-
 
 class CategoryInfo(BaseModel):
     parent: Optional[str] = None
     sub: Optional[str] = None
 
 class MediaItem(BaseModel):
-    # You can expand this later based on your media object structure
     url: Optional[str] = None
     alt: Optional[str] = None
 
@@ -22,7 +18,7 @@ class Product(BaseModel):
     description: Optional[str] = None
     basePrice: Optional[float] = 0.0
     stock: Optional[int] = 0
-    category: Optional[str] = None  # MongoDB ObjectId as string
+    category: Optional[str] = None  
     categoryInfo: Optional[CategoryInfo] = None
     media: Optional[List[MediaItem]] = []
     tags: Optional[List[str]] = []
@@ -30,7 +26,7 @@ class Product(BaseModel):
     sizes: Optional[List[str]] = []
     discountPercentage: Optional[float] = 0.0
     isFeatured: Optional[bool] = False
-    attributes: Optional[List[Dict[str, Any]]] = []  # flexible structure
+    attributes: Optional[List[Dict[str, Any]]] = []  
     createdAt: Optional[datetime] = None
     updatedAt: Optional[datetime] = None
     __v: Optional[int] = None
@@ -40,11 +36,6 @@ class Product(BaseModel):
         json_encoders = {
             datetime: lambda v: v.isoformat() if v else None
         }
-
-
-
-
-
 
 class Address(BaseModel):
     addressType: Optional[str] = None
@@ -56,7 +47,6 @@ class Address(BaseModel):
     country: Optional[str] = None
     street: Optional[str] = None
 
-
 class ShippingMethod(BaseModel):
     provider: Optional[str] = None
     serviceName: Optional[str] = None
@@ -64,7 +54,6 @@ class ShippingMethod(BaseModel):
     estimatedDelivery: Optional[str] = None
     trackingNumber: Optional[str] = None
     trackingUrl: Optional[str] = None
-
 
 class PaymentDetails(BaseModel):
     method: Optional[str] = None
@@ -76,7 +65,6 @@ class PaymentDetails(BaseModel):
     currency: Optional[str] = None
     gatewayResponse: Optional[Any] = None
 
-
 class Totals(BaseModel):
     itemsSubtotal: Optional[float] = None
     cartDiscountAmount: Optional[float] = None
@@ -85,15 +73,12 @@ class Totals(BaseModel):
     checkoutDiscountAmount: Optional[float] = None
     grandTotal: Optional[float] = None
 
-
 class CancellationDetails(BaseModel):
     isStockRestocked: Optional[bool] = None
-
 
 class Metadata(BaseModel):
     cartLastUpdatedAt: Optional[datetime] = None
     errorDetails: Optional[str] = None
-
 
 class Order(BaseModel):
     id: Optional[str] = Field(None, alias="_id")
